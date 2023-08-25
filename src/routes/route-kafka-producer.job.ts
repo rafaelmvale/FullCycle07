@@ -12,6 +12,7 @@ export class RouteKafkaProducerJob {
 
   @Process()
   async handle(job: Job<any>) {
+    console.log('aaaa')
     await this.kafkaService.emit('route', job.data);
     return {};
   }
