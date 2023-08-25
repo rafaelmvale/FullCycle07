@@ -1,32 +1,40 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { CreateRouteDto } from './dto/create-route.dto';
 import { UpdateRouteDto } from './dto/update-route.dto';
 import { PrismaService } from 'src/prisma/prisma/prisma.service';
 import { DirectionsService } from 'src/maps/directions/directions.service';
+import { ClientKafka } from '@nestjs/microservices';
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bull';
 
 @Injectable()
 export class RoutesService {
   constructor(
     private prismaService: PrismaService,
-    private directionsService: DirectionsService){}
+    private directionsService: DirectionsService,
+    // @Inject('KAFKA_SERVICE')
+    // private kafkaService: ClientKafka
+    @InjectQueue('kafka-producer') private kafkaProducerQueue: Queue,
+  ) {}
   async create(createRouteDto: CreateRouteDto) {
-    const {available_travel_modes, geocoded_waypoints,routes, request  } = 
-    await this.directionsService.getDirections(
-      createRouteDto.source_id, 
-      createRouteDto.destination_id)
-    const legs = routes[0].legs[0]
-      return this.prismaService.route.create({
+    const { available_travel_modes, geocoded_waypoints, routes, request } =
+      await this.directionsService.getDirections(
+        createRouteDto.source_id,
+        createRouteDto.destination_id,
+      );
+    const legs = routes[0].legs[0];
+    const routeCreated =  await this.prismaService.route.create({
       data: {
         name: createRouteDto.name,
-        source:{
-          name: legs.start_address, 
+        source: {
+          name: legs.start_address,
           location: {
             lat: legs.start_location.lat,
             lng: legs.start_location.lng,
           },
         },
-        destination:{
-          name:  legs.end_address, 
+        destination: {
+          name: legs.end_address,
           location: {
             lat: legs.end_location.lat,
             lng: legs.end_location.lng,
@@ -35,13 +43,25 @@ export class RoutesService {
         distance: legs.distance.value,
         duration: legs.duration.value,
         directions: JSON.stringify({
-          available_travel_modes, 
+          available_travel_modes,
           geocoded_waypoints,
           routes,
-          request
+          request,
         }),
-      }
+      },
+    });
+    await this.kafkaProducerQueue.add({
+        event: 'RouteCreated',
+      id: routeCreated.id,
+      name: routeCreated.name,
     })
+    // await this.kafkaService.emit('route', {
+    //   event: 'RouteCreated',
+    //   id: routeCreated.id,
+    //   name: routeCreated.name,
+    //   distance: routeCreated.distance,
+    // })
+    return routeCreated
   }
 
   findAll() {
@@ -50,8 +70,8 @@ export class RoutesService {
 
   findOne(id: string) {
     return this.prismaService.route.findUniqueOrThrow({
-      where: { id }
-    })
+      where: { id },
+    });
   }
 
   update(id: number, updateRouteDto: UpdateRouteDto) {
